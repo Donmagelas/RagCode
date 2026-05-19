@@ -65,6 +65,8 @@ def build_ingest_records(
                     "heading_level": chunk.heading_level,
                     "heading_path": chunk.heading_path,
                     "sort_order": chunk.sort_order,
+                    "node_type": chunk.node_type,
+                    "structural_only": chunk.structural_only,
                     "parent_id": chunk.parent_id,
                     "prev_sibling_id": chunk.prev_sibling_id,
                     "next_sibling_id": chunk.next_sibling_id,
@@ -214,6 +216,7 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
         INSERT INTO doc_chunks (
             id, doc_id, framework_name, framework_version, file_path,
             heading, heading_level, heading_path, sort_order,
+            node_type, structural_only,
             parent_id, prev_sibling_id, next_sibling_id,
             own_content, raw_markdown, metadata_json, metadata_text,
             content_embedding, metadata_embedding,
@@ -222,6 +225,7 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
         VALUES (
             %(id)s, %(doc_id)s, %(framework_name)s, %(framework_version)s, %(file_path)s,
             %(heading)s, %(heading_level)s, %(heading_path)s::jsonb, %(sort_order)s,
+            %(node_type)s, %(structural_only)s,
             %(parent_id)s, %(prev_sibling_id)s, %(next_sibling_id)s,
             %(own_content)s, %(raw_markdown)s, %(metadata_json)s::jsonb, %(metadata_text)s,
             %(content_embedding)s::vector, %(metadata_embedding)s::vector,
@@ -234,6 +238,8 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
             heading_level = EXCLUDED.heading_level,
             heading_path = EXCLUDED.heading_path,
             sort_order = EXCLUDED.sort_order,
+            node_type = EXCLUDED.node_type,
+            structural_only = EXCLUDED.structural_only,
             parent_id = EXCLUDED.parent_id,
             prev_sibling_id = EXCLUDED.prev_sibling_id,
             next_sibling_id = EXCLUDED.next_sibling_id,
