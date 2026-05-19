@@ -141,6 +141,8 @@ def _split_long_chunk(
     original = parent.own_content
     parent.own_content = ""
     parent.raw_markdown = heading_markdown
+    parent.node_type = "section"
+    parent.structural_only = True
 
     pieces = _split_text(original, max_chunk_chars, min_chunk_chars)
     previous_part: DocChunk | None = None
@@ -153,6 +155,8 @@ def _split_long_chunk(
             heading_level=parent.heading_level + 1,
             heading_path=[*parent.heading_path, f"part {part_index}"],
             sort_order=len(chunks),
+            node_type="part",
+            structural_only=False,
             parent_id=parent.id,
             prev_sibling_id=previous_part.id if previous_part else None,
             own_content=piece,
@@ -178,6 +182,8 @@ def _split_long_chunk_by_tokens(
     original = parent.own_content
     parent.own_content = ""
     parent.raw_markdown = heading_markdown
+    parent.node_type = "section"
+    parent.structural_only = True
 
     pieces = _split_text_by_tokens(
         original,
@@ -196,6 +202,8 @@ def _split_long_chunk_by_tokens(
             heading_level=parent.heading_level + 1,
             heading_path=[*parent.heading_path, f"part {part_index}"],
             sort_order=len(chunks),
+            node_type="part",
+            structural_only=False,
             parent_id=parent.id,
             prev_sibling_id=previous_part.id if previous_part else None,
             own_content=piece,

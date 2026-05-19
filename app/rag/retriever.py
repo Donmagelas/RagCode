@@ -28,12 +28,20 @@ class RouteHit:
 
 
 @dataclass(frozen=True)
+class RelatedEdge:
+    chunk_id: str
+    relation: str
+    structural_only: bool = False
+
+
+@dataclass(frozen=True)
 class ExpandedChunk:
     chunk_id: str
     source_chunk_id: str
     relation: str
     score: float
     heading_path: list[str] = field(default_factory=list)
+    structural_only: bool = False
 
 
 @dataclass
@@ -148,19 +156,27 @@ def build_expansion_events(
     events: list[ExpandedChunk] = []
     for source_id, score in seed_scores.items():
         for related_item in related_ids.get(source_id, []):
-            if isinstance(related_item, tuple):
-                related_id, relation = related_item
-            else:
-                related_id, relation = related_item, "related"
+            edge = _normalize_related_edge(related_item)
             events.append(
                 ExpandedChunk(
-                    chunk_id=str(related_id),
+                    chunk_id=edge.chunk_id,
                     source_chunk_id=source_id,
-                    relation=str(relation),
+                    relation=edge.relation,
                     score=score * ratio,
+                    structural_only=edge.structural_only,
                 )
             )
     return events
+
+
+def _normalize_related_edge(related_item: Any) -> RelatedEdge:
+    """兼容旧 tuple/string 表示，并统一成带 structural_only 的边。"""
+    if isinstance(related_item, RelatedEdge):
+        return related_item
+    if isinstance(related_item, tuple):
+        related_id, relation = related_item
+        return RelatedEdge(chunk_id=str(related_id), relation=str(relation))
+    return RelatedEdge(chunk_id=str(related_item), relation="related")
 
 
 def limit_scores(score_by_id: dict[str, float], *, top_k: int) -> dict[str, float]:
@@ -203,8 +219,14 @@ def expand_scores_recursive(
     max_depth: int,
 ) -> tuple[dict[str, float], list[ExpandedChunk]]:
     """按标题树关系递归扩展，深度和折扣全部由配置控制。"""
+    if not seed_scores or max_depth <= 0:
+        return dict(seed_scores), []
+
+    # 扩展阈值由最高 seed 分数计算，递归过程中保持固定。
+    expand_threshold = max(seed_scores.values()) * ratio
     score_by_id = dict(seed_scores)
     frontier = dict(seed_scores)
+    visited = set(seed_scores)
     events: list[ExpandedChunk] = []
 
     for _depth in range(max_depth):
@@ -216,19 +238,44 @@ def expand_scores_recursive(
             source_score = frontier.get(source_id)
             if source_score is None:
                 continue
-            for related_id, relation in edges:
-                inherited_score = source_score * ratio
-                if inherited_score <= score_by_id.get(str(related_id), 0.0):
+            for related_item in edges:
+                edge = _normalize_related_edge(related_item)
+                if edge.chunk_id in visited:
                     continue
-                related_chunk_id = str(related_id)
-                score_by_id[related_chunk_id] = inherited_score
-                next_frontier[related_chunk_id] = inherited_score
+
+                inherited_score = source_score * ratio
+                if edge.structural_only:
+                    # structural_only 父节点不计入结果，但保留当前分数继续向外传播。
+                    visited.add(edge.chunk_id)
+                    next_frontier[edge.chunk_id] = max(
+                        next_frontier.get(edge.chunk_id, 0.0), source_score
+                    )
+                    events.append(
+                        ExpandedChunk(
+                            chunk_id=edge.chunk_id,
+                            source_chunk_id=source_id,
+                            relation=edge.relation,
+                            score=source_score,
+                            structural_only=True,
+                        )
+                    )
+                    continue
+
+                if inherited_score < expand_threshold:
+                    continue
+                if inherited_score <= score_by_id.get(edge.chunk_id, 0.0):
+                    continue
+
+                visited.add(edge.chunk_id)
+                score_by_id[edge.chunk_id] = inherited_score
+                next_frontier[edge.chunk_id] = inherited_score
                 events.append(
                     ExpandedChunk(
-                        chunk_id=related_chunk_id,
+                        chunk_id=edge.chunk_id,
                         source_chunk_id=source_id,
-                        relation=str(relation),
+                        relation=edge.relation,
                         score=inherited_score,
+                        structural_only=False,
                     )
                 )
         frontier = next_frontier
@@ -392,6 +439,8 @@ def retrieve_chunks(
         )
         score_by_id = limit_scores(score_by_id, top_k=top_k)
         rows = _load_chunks(conn, list(score_by_id))
+        rows = [row for row in rows if not bool(row["structural_only"])]
+        score_by_id = {str(row["id"]): score_by_id[str(row["id"])] for row in rows}
         raw_markdown_by_id = {str(row["id"]): str(row["raw_markdown"]) for row in rows}
         selected_chunk_ids = limit_chunk_ids_by_context_tokens(
             list(score_by_id),
@@ -478,6 +527,7 @@ def _attach_expansion_heading_paths(
             relation=event.relation,
             score=event.score,
             heading_path=heading_by_id.get(event.chunk_id, []),
+            structural_only=event.structural_only,
         )
 
 
@@ -561,7 +611,7 @@ def _load_chunks(conn: psycopg.Connection, chunk_ids: list[str]) -> list[dict[st
         """
         SELECT
             c.id, c.doc_id, d.skill_name, c.file_path, c.heading,
-            c.heading_path, c.sort_order, c.raw_markdown
+            c.heading_path, c.sort_order, c.raw_markdown, c.structural_only
         FROM doc_chunks c
         JOIN docs d ON d.id = c.doc_id
         WHERE c.id = ANY(%(chunk_ids)s)
@@ -584,7 +634,7 @@ def _load_heading_paths(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[
     return {str(row["id"]): list(row["heading_path"]) for row in rows}
 
 
-def _load_related_edges(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[str, list[tuple[str, str]]]:
+def _load_related_edges(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[str, list[RelatedEdge]]:
     rows = conn.execute(
         """
         SELECT id, parent_id, prev_sibling_id, next_sibling_id
@@ -603,18 +653,47 @@ def _load_related_edges(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[
         {"chunk_ids": chunk_ids},
     ).fetchall()
 
-    related: dict[str, list[tuple[str, str]]] = {chunk_id: [] for chunk_id in chunk_ids}
+    raw_related: dict[str, list[tuple[str, str]]] = {chunk_id: [] for chunk_id in chunk_ids}
     for row in rows:
         source_id = str(row["id"])
         if row["parent_id"]:
-            related[source_id].append((str(row["parent_id"]), "parent"))
+            raw_related[source_id].append((str(row["parent_id"]), "parent"))
         if row["prev_sibling_id"]:
-            related[source_id].append((str(row["prev_sibling_id"]), "prev_sibling"))
+            raw_related[source_id].append((str(row["prev_sibling_id"]), "prev_sibling"))
         if row["next_sibling_id"]:
-            related[source_id].append((str(row["next_sibling_id"]), "next_sibling"))
+            raw_related[source_id].append((str(row["next_sibling_id"]), "next_sibling"))
     for row in child_rows:
-        related.setdefault(str(row["parent_id"]), []).append((str(row["id"]), "child"))
-    return related
+        raw_related.setdefault(str(row["parent_id"]), []).append((str(row["id"]), "child"))
+
+    related_ids = sorted(
+        {related_id for edges in raw_related.values() for related_id, _relation in edges}
+    )
+    structural_by_id = _load_structural_flags(conn, related_ids)
+    return {
+        source_id: [
+            RelatedEdge(
+                chunk_id=related_id,
+                relation=relation,
+                structural_only=structural_by_id.get(related_id, False),
+            )
+            for related_id, relation in edges
+        ]
+        for source_id, edges in raw_related.items()
+    }
+
+
+def _load_structural_flags(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[str, bool]:
+    if not chunk_ids:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT id, structural_only
+        FROM doc_chunks
+        WHERE id = ANY(%(chunk_ids)s)
+        """,
+        {"chunk_ids": chunk_ids},
+    ).fetchall()
+    return {str(row["id"]): bool(row["structural_only"]) for row in rows}
 
 
 def _load_related_ids(conn: psycopg.Connection, chunk_ids: list[str]) -> dict[str, list[str]]:

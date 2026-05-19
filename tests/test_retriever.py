@@ -1,4 +1,5 @@
 from app.rag.retriever import (
+    RelatedEdge,
     build_vector_rank_sql,
     expand_queries,
     expand_scores_recursive,
@@ -97,8 +98,31 @@ def test_expand_scores_recursive_respects_depth_and_ratio() -> None:
         max_depth=2,
     )
 
-    assert expanded == {"seed": 1.0, "parent": 0.5, "grandparent": 0.25}
-    assert [event.chunk_id for event in events] == ["parent", "grandparent"]
+    assert expanded == {"seed": 1.0, "parent": 0.5}
+    assert [event.chunk_id for event in events] == ["parent"]
+
+
+def test_expand_scores_recursive_passes_through_structural_nodes() -> None:
+    related = {
+        "part-1": [RelatedEdge(chunk_id="section", relation="parent", structural_only=True)],
+        "section": [
+            RelatedEdge(chunk_id="part-1", relation="child", structural_only=False),
+            RelatedEdge(chunk_id="part-2", relation="child", structural_only=False),
+        ],
+    }
+
+    expanded, events = expand_scores_recursive(
+        {"part-1": 1.0},
+        load_related_edges=lambda ids: {chunk_id: related.get(chunk_id, []) for chunk_id in ids},
+        ratio=0.55,
+        max_depth=3,
+    )
+
+    assert expanded == {"part-1": 1.0, "part-2": 0.55}
+    assert [(event.chunk_id, event.relation, event.structural_only) for event in events] == [
+        ("section", "parent", True),
+        ("part-2", "child", False),
+    ]
 
 
 def test_limit_chunk_ids_by_context_tokens_keeps_high_score_within_budget() -> None:

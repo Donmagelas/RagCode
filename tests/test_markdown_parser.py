@@ -74,8 +74,12 @@ def test_parse_markdown_document_splits_long_own_content_into_part_children() ->
 
     assert parent.heading == "长章节"
     assert parent.own_content == ""
+    assert parent.node_type == "section"
+    assert parent.structural_only is True
     assert len(parts) > 1
     assert all(part.parent_id == parent.id for part in parts)
+    assert all(part.node_type == "part" for part in parts)
+    assert all(part.structural_only is False for part in parts)
     assert all(part.heading.startswith("长章节 part ") for part in parts)
     assert "第 0 行内容。" in parts[0].own_content
 

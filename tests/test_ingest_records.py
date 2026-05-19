@@ -46,6 +46,10 @@ def test_build_ingest_records_uses_token_chunking_options(tmp_path: Path) -> Non
     )
 
     assert records.chunks[0]["own_content"] == ""
+    assert records.chunks[0]["node_type"] == "section"
+    assert records.chunks[0]["structural_only"] is True
+    assert all(chunk["node_type"] == "part" for chunk in records.chunks[1:])
+    assert all(chunk["structural_only"] is False for chunk in records.chunks[1:])
     assert [chunk["own_content"] for chunk in records.chunks[1:]] == ["abcd", "defg", "ghij"]
 
 

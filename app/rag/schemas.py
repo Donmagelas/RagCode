@@ -12,6 +12,8 @@ class DocChunk:
     heading_level: int
     heading_path: list[str]
     sort_order: int
+    node_type: str = "section"
+    structural_only: bool = False
     parent_id: str | None = None
     prev_sibling_id: str | None = None
     next_sibling_id: str | None = None

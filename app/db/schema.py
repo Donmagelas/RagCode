@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
     heading_level integer NOT NULL,
     heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
     sort_order integer NOT NULL,
+    node_type text NOT NULL DEFAULT 'section',
+    structural_only boolean NOT NULL DEFAULT false,
     parent_id text NULL,
     prev_sibling_id text NULL,
     next_sibling_id text NULL,
