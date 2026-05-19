@@ -1,0 +1,10 @@
+.env
+.pytest_cache/
+.ruff_cache/
+.idea/
+__pycache__/
+*.pyc
+_tmp*/
+aurora_gamekit_rag_md_docs/
+examples/
+AGENTS.md

@@ -1,0 +1,38 @@
+[project]
+name = "codeagent"
+version = "0.1.0"
+description = "CodeAgent for self-developed game framework development."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic==1.18.4",
+  "fastapi==0.136.1",
+  "langgraph==1.2.0",
+  "markdown-it-py==4.2.0",
+  "openai==2.37.0",
+  "psycopg[binary]==3.3.4",
+  "pydantic-settings==2.14.1",
+  "PyYAML==6.0.3",
+  "SQLAlchemy==2.0.49",
+  "typer==0.25.1",
+  "uvicorn[standard]==0.47.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.0.3",
+  "ruff==0.15.13",
+]
+
+[project.scripts]
+codeagent = "app.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+  "_tmp_*",
+]

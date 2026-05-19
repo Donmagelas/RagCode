@@ -1,0 +1,22 @@
+database:
+  url: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/codeagent
+
+models:
+  dashscope_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  chat_model: qwen3.6-plus
+  embedding_model: qwen3-vl-embedding
+  embedding_dim: 1024
+
+rag:
+  max_chunk_tokens: 1200
+  chunk_overlap_tokens: 120
+  min_chunk_tokens: 80
+  rrf_k: 60
+  retriever_top_k: 30
+  seed_top_n: 8
+  seed_threshold_ratio: 0.75
+  expand_threshold_ratio: 0.55
+  query_expansion_max_terms: 4
+  max_depth: 3
+  max_final_chunks: 12
+  max_context_tokens: 12000
