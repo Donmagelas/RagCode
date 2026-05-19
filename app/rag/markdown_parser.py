@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from markdown_it import MarkdownIt
 
 from app.rag.schemas import DocChunk
+from app.rag.token_counter import HeuristicTokenCounter, TokenCounter
 
 
 @dataclass
@@ -20,7 +21,11 @@ def parse_markdown_document(
     file_path: str,
     markdown: str,
     *,
-    max_chunk_chars: int = 6000,
+    max_chunk_tokens: int | None = None,
+    chunk_overlap_tokens: int = 0,
+    min_chunk_tokens: int = 80,
+    token_counter: TokenCounter | None = None,
+    max_chunk_chars: int | None = 6000,
     min_chunk_chars: int = 80,
 ) -> list[DocChunk]:
     """按 Markdown 标题树构建 chunk；代码块里的 # 不会被当作标题。"""
@@ -73,7 +78,19 @@ def parse_markdown_document(
         chunks.append(chunk)
         stack.append(chunk)
 
-        if len(own_content) > max_chunk_chars:
+        if max_chunk_tokens is not None:
+            counter = token_counter or HeuristicTokenCounter()
+            if len(counter.encode(own_content)) > max_chunk_tokens:
+                _split_long_chunk_by_tokens(
+                    chunks,
+                    chunk,
+                    heading_markdown,
+                    max_chunk_tokens,
+                    chunk_overlap_tokens,
+                    min_chunk_tokens,
+                    counter,
+                )
+        elif max_chunk_chars is not None and len(own_content) > max_chunk_chars:
             _split_long_chunk(chunks, chunk, heading_markdown, max_chunk_chars, min_chunk_chars)
 
     return chunks
@@ -148,6 +165,49 @@ def _split_long_chunk(
         previous_part = part
 
 
+def _split_long_chunk_by_tokens(
+    chunks: list[DocChunk],
+    parent: DocChunk,
+    heading_markdown: str,
+    max_chunk_tokens: int,
+    chunk_overlap_tokens: int,
+    min_chunk_tokens: int,
+    token_counter: TokenCounter,
+) -> None:
+    # 父节点保留标题结构，正文按 token 窗口转移到 part 子节点。
+    original = parent.own_content
+    parent.own_content = ""
+    parent.raw_markdown = heading_markdown
+
+    pieces = _split_text_by_tokens(
+        original,
+        max_chunk_tokens=max_chunk_tokens,
+        chunk_overlap_tokens=chunk_overlap_tokens,
+        min_chunk_tokens=min_chunk_tokens,
+        token_counter=token_counter,
+    )
+    previous_part: DocChunk | None = None
+    for part_index, piece in enumerate(pieces, start=1):
+        part = DocChunk(
+            id=_chunk_id(parent.doc_id, len(chunks)),
+            doc_id=parent.doc_id,
+            file_path=parent.file_path,
+            heading=f"{parent.heading} part {part_index}",
+            heading_level=parent.heading_level + 1,
+            heading_path=[*parent.heading_path, f"part {part_index}"],
+            sort_order=len(chunks),
+            parent_id=parent.id,
+            prev_sibling_id=previous_part.id if previous_part else None,
+            own_content=piece,
+            raw_markdown=piece,
+            metadata=dict(parent.metadata),
+        )
+        if previous_part is not None:
+            previous_part.next_sibling_id = part.id
+        chunks.append(part)
+        previous_part = part
+
+
 def _split_text(text: str, max_chars: int, min_chars: int) -> list[str]:
     paragraphs = [part for part in text.splitlines() if part.strip()]
     pieces: list[str] = []
@@ -163,6 +223,35 @@ def _split_text(text: str, max_chars: int, min_chars: int) -> list[str]:
 
     if current:
         pieces.append("\n".join(current).strip())
+    return pieces or [text]
+
+
+def _split_text_by_tokens(
+    text: str,
+    *,
+    max_chunk_tokens: int,
+    chunk_overlap_tokens: int,
+    min_chunk_tokens: int,
+    token_counter: TokenCounter,
+) -> list[str]:
+    token_ids = token_counter.encode(text)
+    if len(token_ids) <= max_chunk_tokens:
+        return [text]
+
+    overlap = max(0, min(chunk_overlap_tokens, max_chunk_tokens - 1))
+    step = max_chunk_tokens - overlap
+    pieces: list[str] = []
+    start = 0
+    while start < len(token_ids):
+        end = min(start + max_chunk_tokens, len(token_ids))
+        piece_ids = token_ids[start:end]
+        if len(piece_ids) >= min_chunk_tokens or not pieces:
+            piece = token_counter.decode(piece_ids).strip()
+            if piece:
+                pieces.append(piece)
+        if end == len(token_ids):
+            break
+        start += step
     return pieces or [text]
 
 

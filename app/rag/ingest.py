@@ -10,6 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.rag.markdown_parser import parse_markdown_document
+from app.rag.token_counter import TokenCounter
 from app.routing.skill_router import SkillManifest, discover_skill_manifests
 
 
@@ -19,7 +20,14 @@ class IngestRecords:
     chunks: list[dict[str, Any]]
 
 
-def build_ingest_records(skills_dir: str | Path) -> IngestRecords:
+def build_ingest_records(
+    skills_dir: str | Path,
+    *,
+    max_chunk_tokens: int | None = None,
+    chunk_overlap_tokens: int = 0,
+    min_chunk_tokens: int = 80,
+    token_counter: TokenCounter | None = None,
+) -> IngestRecords:
     """把 skill Markdown 文档转换成可入库记录。"""
     manifests = discover_skill_manifests(skills_dir)
     docs: list[dict[str, Any]] = []
@@ -31,7 +39,15 @@ def build_ingest_records(skills_dir: str | Path) -> IngestRecords:
         content_hash = _sha256(text)
         docs.append(_doc_record(doc_id, manifest, text, content_hash))
 
-        for chunk in parse_markdown_document(doc_id, str(manifest.path), text):
+        for chunk in parse_markdown_document(
+            doc_id,
+            str(manifest.path),
+            text,
+            max_chunk_tokens=max_chunk_tokens,
+            chunk_overlap_tokens=chunk_overlap_tokens,
+            min_chunk_tokens=min_chunk_tokens,
+            token_counter=token_counter,
+        ):
             metadata = {
                 "skill_name": manifest.skill_name,
                 "heading_path": chunk.heading_path,

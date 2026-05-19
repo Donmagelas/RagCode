@@ -1,11 +1,22 @@
 from app.rag.retriever import (
     build_vector_rank_sql,
     expand_queries,
+    expand_scores_recursive,
     expand_scores_once,
     extract_query_terms,
     fuse_rrf,
+    limit_chunk_ids_by_context_tokens,
     limit_scores,
+    select_seed_chunks,
 )
+
+
+class CharTokenCounter:
+    def encode(self, text: str) -> list[str]:
+        return list(text)
+
+    def decode(self, token_ids: list[str]) -> str:
+        return "".join(token_ids)
 
 
 def test_fuse_rrf_combines_rank_lists() -> None:
@@ -59,8 +70,59 @@ def test_limit_scores_keeps_highest_scoring_chunks() -> None:
     assert list(limited) == ["high", "middle"]
 
 
+def test_select_seed_chunks_uses_top_n_and_dynamic_threshold() -> None:
+    fused = [
+        ("top", 1.0),
+        ("keep", 0.8),
+        ("drop_by_threshold", 0.7),
+        ("drop_by_top_n", 0.95),
+    ]
+
+    selected = select_seed_chunks(fused, seed_top_n=3, threshold_ratio=0.75)
+
+    assert list(selected) == ["top", "keep"]
+
+
+def test_expand_scores_recursive_respects_depth_and_ratio() -> None:
+    related = {
+        "seed": [("parent", "parent")],
+        "parent": [("grandparent", "parent")],
+        "grandparent": [("too_far", "parent")],
+    }
+
+    expanded, events = expand_scores_recursive(
+        {"seed": 1.0},
+        load_related_edges=lambda ids: {chunk_id: related.get(chunk_id, []) for chunk_id in ids},
+        ratio=0.5,
+        max_depth=2,
+    )
+
+    assert expanded == {"seed": 1.0, "parent": 0.5, "grandparent": 0.25}
+    assert [event.chunk_id for event in events] == ["parent", "grandparent"]
+
+
+def test_limit_chunk_ids_by_context_tokens_keeps_high_score_within_budget() -> None:
+    raw_markdown_by_id = {
+        "long": "abcdef",
+        "short": "xy",
+        "middle": "123",
+    }
+    score_by_id = {"long": 0.9, "short": 0.8, "middle": 0.7}
+
+    selected = limit_chunk_ids_by_context_tokens(
+        ["long", "short", "middle"],
+        raw_markdown_by_id=raw_markdown_by_id,
+        score_by_id=score_by_id,
+        max_context_tokens=5,
+        token_counter=CharTokenCounter(),
+    )
+
+    assert selected == ["short", "middle"]
+
+
 def test_build_vector_rank_sql_uses_pgvector_distance() -> None:
     sql = build_vector_rank_sql("content_embedding")
 
     assert "content_embedding IS NOT NULL" in sql
     assert "content_embedding <=> %(query_embedding)s::vector" in sql
+    assert "LIMIT %(limit)s" in sql

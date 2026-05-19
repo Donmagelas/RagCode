@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
-from app.cli import app, console_safe_text
+from app.cli import app, console_safe_text, render_retrieval_trace
+from app.rag.retriever import FusedScore, RouteHit, SkillRetrieveTrace
 
 
 def test_cli_exposes_first_stage_commands() -> None:
@@ -38,3 +39,42 @@ def test_agent_run_help_exposes_smoke_debug_options() -> None:
 
 def test_console_safe_text_replaces_unencodable_characters() -> None:
     assert console_safe_text("ok ✅", encoding="gbk") == "ok ?"
+
+
+def test_debug_rag_help_exposes_trace_option() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["debug-rag", "--help"])
+
+    assert result.exit_code == 0
+    assert "--trace" in result.output
+
+
+def test_render_retrieval_trace_includes_routes_rrf_and_human_review() -> None:
+    trace = SkillRetrieveTrace(
+        skill_name="lifecycle",
+        query="OnBoot",
+        expanded_queries=["OnBoot"],
+        route_results={
+            "content_fts": [
+                RouteHit(
+                    route="content_fts",
+                    query="OnBoot",
+                    chunk_id="chunk-1",
+                    rank=1,
+                    heading_path=["Module", "OnBoot"],
+                )
+            ]
+        },
+        rrf_results=[FusedScore(chunk_id="chunk-1", score=0.1)],
+        seed_chunks=[FusedScore(chunk_id="chunk-1", score=0.1)],
+        expanded_chunks=[],
+        final_chunk_ids=["chunk-1"],
+        human_review={"enabled": True, "selected_indexes": [1], "approved_chunk_ids": ["chunk-1"]},
+    )
+
+    rendered = render_retrieval_trace(trace)
+
+    assert "route: content_fts" in rendered
+    assert "RRF top:" in rendered
+    assert "human_review:" in rendered

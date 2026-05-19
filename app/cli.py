@@ -22,7 +22,8 @@ from app.rag.ingest import (
     load_record_cache,
 )
 from app.rag.human_review import parse_selected_indexes
-from app.rag.retriever import retrieve_chunks
+from app.rag.retriever import SkillRetrieveTrace, record_human_review, retrieve_chunks
+from app.rag.token_counter import Qwen3TokenCounter
 from app.routing.skill_router import discover_skill_manifests, format_skill_manifest_text
 from app.settings import load_app_settings
 from app.tools.registry import create_default_tool_registry
@@ -57,7 +58,14 @@ def ingest(
 ) -> None:
     """解析 skill 文档并写入知识库。"""
     settings = load_app_settings(config)
-    records = build_ingest_records(skills_dir)
+    token_counter = Qwen3TokenCounter(settings.models.tokenizer_model)
+    records = build_ingest_records(
+        skills_dir,
+        max_chunk_tokens=settings.rag.max_chunk_tokens,
+        chunk_overlap_tokens=settings.rag.chunk_overlap_tokens,
+        min_chunk_tokens=settings.rag.min_chunk_tokens,
+        token_counter=token_counter,
+    )
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if api_key and (with_metadata or with_embeddings):
         apply_record_cache(records, load_record_cache(settings.database.url))
@@ -94,13 +102,21 @@ def retrieve(
     """对指定 skill 执行内部 RAG。"""
     settings = load_app_settings(config)
     embeddings = _query_embeddings_if_available(query, settings)
+    token_counter = Qwen3TokenCounter(settings.models.tokenizer_model)
     chunks = retrieve_chunks(
         settings.database.url,
         skill_name=skill,
         query=query,
         top_k=settings.rag.max_final_chunks,
         rrf_k=settings.rag.rrf_k,
+        retriever_top_k=settings.rag.retriever_top_k,
+        seed_top_n=settings.rag.seed_top_n,
+        seed_threshold_ratio=settings.rag.seed_threshold_ratio,
+        expand_threshold_ratio=settings.rag.expand_threshold_ratio,
         query_expansion_max_terms=settings.rag.query_expansion_max_terms,
+        max_depth=settings.rag.max_depth,
+        max_context_tokens=settings.rag.max_context_tokens,
+        token_counter=token_counter,
         query_embedding=embeddings,
         metadata_query_embedding=embeddings,
     )
@@ -116,21 +132,37 @@ def debug_rag(
     skill: str = typer.Option(...),
     query: str = typer.Option(...),
     human_review: bool = typer.Option(False, "--human-review", help="开启人工确认"),
+    trace: bool = typer.Option(False, "--trace", help="输出四路召回、RRF 和结构扩展过程"),
     config: Path = typer.Option(Path("config/default.yaml"), help="配置文件路径"),
 ) -> None:
     """输出 RAG 调试信息。"""
     settings = load_app_settings(config)
     embeddings = _query_embeddings_if_available(query, settings)
-    chunks = retrieve_chunks(
+    token_counter = Qwen3TokenCounter(settings.models.tokenizer_model)
+    retrieve_result = retrieve_chunks(
         settings.database.url,
         skill_name=skill,
         query=query,
         top_k=settings.rag.max_final_chunks,
         rrf_k=settings.rag.rrf_k,
+        retriever_top_k=settings.rag.retriever_top_k,
+        seed_top_n=settings.rag.seed_top_n,
+        seed_threshold_ratio=settings.rag.seed_threshold_ratio,
+        expand_threshold_ratio=settings.rag.expand_threshold_ratio,
         query_expansion_max_terms=settings.rag.query_expansion_max_terms,
+        max_depth=settings.rag.max_depth,
+        max_context_tokens=settings.rag.max_context_tokens,
+        token_counter=token_counter,
         query_embedding=embeddings,
         metadata_query_embedding=embeddings,
+        return_trace=trace,
     )
+    if trace:
+        chunks = retrieve_result.chunks
+        retrieve_trace = retrieve_result.trace
+    else:
+        chunks = retrieve_result
+        retrieve_trace = None
     typer.echo(f"debug-rag skill={skill} query={query} human_review={human_review}")
     typer.echo(f"chunks={len(chunks)}")
     for index, chunk in enumerate(chunks, start=1):
@@ -145,9 +177,53 @@ def debug_rag(
         selected_indexes = parse_selected_indexes(selected_text, max_index=len(chunks))
         if selected_indexes:
             chunks = [chunks[index - 1] for index in selected_indexes]
+        if retrieve_trace is not None:
+            record_human_review(
+                retrieve_trace,
+                selected_indexes=selected_indexes,
+                approved_chunk_ids=[chunk.id for chunk in chunks],
+            )
         typer.echo(f"approved_chunks={len(chunks)}")
         for index, chunk in enumerate(chunks, start=1):
             typer.echo(f"approved {index}. {' > '.join(chunk.heading_path)}")
+    if retrieve_trace is not None:
+        typer.echo(render_retrieval_trace(retrieve_trace))
+
+
+def render_retrieval_trace(trace: SkillRetrieveTrace) -> str:
+    """渲染 RAG trace，帮助调试四路召回、RRF 和结构扩展。"""
+    lines: list[str] = []
+    lines.append("trace:")
+    lines.append(f"expanded_queries: {', '.join(trace.expanded_queries)}")
+    for route in ["content_fts", "metadata_fts", "content_vector", "metadata_vector"]:
+        hits = trace.route_results.get(route, [])
+        lines.append(f"route: {route}")
+        for hit in hits[:10]:
+            label = " > ".join(hit.heading_path) if hit.heading_path else hit.chunk_id
+            lines.append(f"{hit.rank}. [{hit.query}] {label}")
+
+    lines.append("RRF top:")
+    for index, item in enumerate(trace.rrf_results[:10], start=1):
+        lines.append(f"{index}. {item.chunk_id} score={item.score:.6f}")
+
+    lines.append("seed:")
+    for index, item in enumerate(trace.seed_chunks[:10], start=1):
+        lines.append(f"{index}. {item.chunk_id} score={item.score:.6f}")
+
+    lines.append("expanded:")
+    for item in trace.expanded_chunks[:20]:
+        label = " > ".join(item.heading_path) if item.heading_path else item.chunk_id
+        lines.append(f"+ {item.relation}: {label} <- {item.source_chunk_id} score={item.score:.6f}")
+
+    lines.append("final:")
+    for index, chunk_id in enumerate(trace.final_chunk_ids, start=1):
+        lines.append(f"{index}. {chunk_id}")
+
+    if trace.human_review is not None:
+        lines.append("human_review:")
+        lines.append(f"selected_indexes: {trace.human_review['selected_indexes']}")
+        lines.append(f"approved_chunk_ids: {trace.human_review['approved_chunk_ids']}")
+    return "\n".join(lines)
 
 
 @app.command("agent-run")

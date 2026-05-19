@@ -5,6 +5,7 @@ from typing import Any
 
 from app.models.embeddings import EmbeddingClient
 from app.rag.retriever import retrieve_chunks
+from app.rag.token_counter import Qwen3TokenCounter
 
 
 class SkillTool:
@@ -29,7 +30,14 @@ class SkillTool:
             query=query,
             top_k=top_k,
             rrf_k=self._settings.rag.rrf_k,
+            retriever_top_k=self._settings.rag.retriever_top_k,
+            seed_top_n=self._settings.rag.seed_top_n,
+            seed_threshold_ratio=self._settings.rag.seed_threshold_ratio,
+            expand_threshold_ratio=self._settings.rag.expand_threshold_ratio,
             query_expansion_max_terms=self._settings.rag.query_expansion_max_terms,
+            max_depth=self._settings.rag.max_depth,
+            max_context_tokens=self._settings.rag.max_context_tokens,
+            token_counter=Qwen3TokenCounter(self._settings.models.tokenizer_model),
             query_embedding=query_embedding,
             metadata_query_embedding=query_embedding,
         )

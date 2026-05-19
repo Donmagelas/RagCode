@@ -9,6 +9,14 @@ from app.rag.ingest import (
 )
 
 
+class CharTokenCounter:
+    def encode(self, text: str) -> list[str]:
+        return list(text)
+
+    def decode(self, token_ids: list[str]) -> str:
+        return "".join(token_ids)
+
+
 def test_build_ingest_records_parses_file_style_skill(tmp_path: Path) -> None:
     skill_file = tmp_path / "05_UI系统.md"
     skill_file.write_text("# UI 系统\n\nUI 根说明。\n\n## Widget\n\nWidget 说明。", encoding="utf-8")
@@ -23,6 +31,22 @@ def test_build_ingest_records_parses_file_style_skill(tmp_path: Path) -> None:
     assert {chunk["heading"] for chunk in records.chunks} == {"UI 系统", "Widget"}
     assert all(chunk["doc_id"] == doc["id"] for chunk in records.chunks)
     assert all("metadata_text" in chunk for chunk in records.chunks)
+
+
+def test_build_ingest_records_uses_token_chunking_options(tmp_path: Path) -> None:
+    skill_file = tmp_path / "long.md"
+    skill_file.write_text("# Long\n\nabcdefghij", encoding="utf-8")
+
+    records = build_ingest_records(
+        tmp_path,
+        max_chunk_tokens=4,
+        chunk_overlap_tokens=1,
+        min_chunk_tokens=1,
+        token_counter=CharTokenCounter(),
+    )
+
+    assert records.chunks[0]["own_content"] == ""
+    assert [chunk["own_content"] for chunk in records.chunks[1:]] == ["abcd", "defg", "ghij"]
 
 
 def test_apply_embeddings_sets_content_and_metadata_vectors(tmp_path: Path) -> None:

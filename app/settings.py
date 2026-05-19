@@ -17,6 +17,7 @@ class ModelSettings(BaseModel):
     chat_model: str = "qwen3.6-plus"
     embedding_model: str = "qwen3-vl-embedding"
     embedding_dim: int = 1024
+    tokenizer_model: str = "Qwen/Qwen3-Embedding-0.6B"
 
 
 class RagSettings(BaseModel):
@@ -66,5 +67,7 @@ def _apply_env_overrides(settings: AppSettings) -> AppSettings:
         data["models"]["embedding_model"] = embedding_model
     if embedding_dim := os.getenv("EMBEDDING_DIM"):
         data["models"]["embedding_dim"] = int(embedding_dim)
+    if tokenizer_model := os.getenv("TOKENIZER_MODEL"):
+        data["models"]["tokenizer_model"] = tokenizer_model
 
     return AppSettings.model_validate(data)

@@ -6,6 +6,7 @@ models:
   chat_model: qwen3.6-plus
   embedding_model: qwen3-vl-embedding
   embedding_dim: 1024
+  tokenizer_model: Qwen/Qwen3-Embedding-0.6B
 
 rag:
   max_chunk_tokens: 1200

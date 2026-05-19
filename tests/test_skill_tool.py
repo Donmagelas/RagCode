@@ -6,12 +6,19 @@ def test_skill_tool_returns_markdown_context_from_retriever() -> None:
         class Rag:
             max_final_chunks = 3
             rrf_k = 60
+            retriever_top_k = 30
+            seed_top_n = 8
+            seed_threshold_ratio = 0.75
+            expand_threshold_ratio = 0.55
             query_expansion_max_terms = 2
+            max_depth = 3
+            max_context_tokens = 12000
 
         class Models:
             dashscope_base_url = "https://example.test"
             embedding_model = "fake"
             embedding_dim = 1024
+            tokenizer_model = "fake-tokenizer"
 
         class Database:
             url = "postgresql://example"
@@ -42,3 +49,9 @@ def test_skill_tool_returns_markdown_context_from_retriever() -> None:
     assert calls[0]["skill_name"] == "ui"
     assert calls[0]["query"] == "how to open window"
     assert calls[0]["top_k"] == 2
+    assert calls[0]["retriever_top_k"] == 30
+    assert calls[0]["seed_top_n"] == 8
+    assert calls[0]["seed_threshold_ratio"] == 0.75
+    assert calls[0]["expand_threshold_ratio"] == 0.55
+    assert calls[0]["max_depth"] == 3
+    assert calls[0]["max_context_tokens"] == 12000

@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-settings==2.14.1",
   "PyYAML==6.0.3",
   "SQLAlchemy==2.0.49",
+  "transformers==5.8.1",
   "typer==0.25.1",
   "uvicorn[standard]==0.47.0",
 ]

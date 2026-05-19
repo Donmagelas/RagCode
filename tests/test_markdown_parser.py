@@ -1,6 +1,14 @@
 from app.rag.markdown_parser import parse_markdown_document
 
 
+class CharTokenCounter:
+    def encode(self, text: str) -> list[str]:
+        return list(text)
+
+    def decode(self, token_ids: list[str]) -> str:
+        return "".join(token_ids)
+
+
 def test_parse_markdown_document_builds_heading_tree_and_own_content() -> None:
     markdown = """文档介绍。
 
@@ -70,6 +78,26 @@ def test_parse_markdown_document_splits_long_own_content_into_part_children() ->
     assert all(part.parent_id == parent.id for part in parts)
     assert all(part.heading.startswith("长章节 part ") for part in parts)
     assert "第 0 行内容。" in parts[0].own_content
+
+
+def test_parse_markdown_document_splits_long_own_content_by_token_counter() -> None:
+    markdown = "# 长章节\n\nabcdefghij"
+
+    chunks = parse_markdown_document(
+        "long",
+        "long.md",
+        markdown,
+        max_chunk_tokens=4,
+        chunk_overlap_tokens=1,
+        min_chunk_tokens=1,
+        token_counter=CharTokenCounter(),
+    )
+
+    parent = chunks[0]
+    parts = chunks[1:]
+
+    assert parent.own_content == ""
+    assert [part.own_content for part in parts] == ["abcd", "defg", "ghij"]
 def test_parse_markdown_document_ignores_frontmatter_content() -> None:
     markdown = """---
 name: ui
