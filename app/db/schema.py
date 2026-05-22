@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
     sort_order integer NOT NULL,
     node_type text NOT NULL DEFAULT 'section',
     structural_only boolean NOT NULL DEFAULT false,
+    token_count integer NOT NULL DEFAULT 0,
     parent_id text NULL,
     prev_sibling_id text NULL,
     next_sibling_id text NULL,

@@ -40,6 +40,7 @@ class SkillTool:
             token_counter=Qwen3TokenCounter(self._settings.models.tokenizer_model),
             query_embedding=query_embedding,
             metadata_query_embedding=query_embedding,
+            connect_timeout_seconds=self._settings.database.connect_timeout_seconds,
         )
         serialized_chunks = [_serialize_chunk(chunk) for chunk in chunks]
         return {
@@ -65,6 +66,7 @@ def _serialize_chunk(chunk: Any) -> dict[str, Any]:
     """把 retriever 返回对象转成 LangGraph 状态里稳定可序列化的 dict。"""
     return {
         "skill_name": chunk.skill_name,
+        "file_path": getattr(chunk, "file_path", ""),
         "heading_path": list(chunk.heading_path),
         "raw_markdown": chunk.raw_markdown,
         "score": float(chunk.score),

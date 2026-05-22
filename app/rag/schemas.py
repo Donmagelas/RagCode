@@ -14,6 +14,7 @@ class DocChunk:
     sort_order: int
     node_type: str = "section"
     structural_only: bool = False
+    token_count: int = 0
     parent_id: str | None = None
     prev_sibling_id: str | None = None
     next_sibling_id: str | None = None

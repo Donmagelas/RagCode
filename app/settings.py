@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class DatabaseSettings(BaseModel):
     url: str = "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/codeagent"
+    connect_timeout_seconds: int = 5
 
 
 class ModelSettings(BaseModel):
@@ -18,6 +19,7 @@ class ModelSettings(BaseModel):
     embedding_model: str = "qwen3-vl-embedding"
     embedding_dim: int = 1024
     tokenizer_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    metadata_batch_size: int = 8
 
 
 class RagSettings(BaseModel):
@@ -59,6 +61,8 @@ def _apply_env_overrides(settings: AppSettings) -> AppSettings:
 
     if database_url := os.getenv("DATABASE_URL"):
         data["database"]["url"] = database_url
+    if connect_timeout := os.getenv("DATABASE_CONNECT_TIMEOUT_SECONDS"):
+        data["database"]["connect_timeout_seconds"] = int(connect_timeout)
     if base_url := os.getenv("DASHSCOPE_BASE_URL"):
         data["models"]["dashscope_base_url"] = base_url
     if chat_model := os.getenv("CHAT_MODEL"):
@@ -69,5 +73,7 @@ def _apply_env_overrides(settings: AppSettings) -> AppSettings:
         data["models"]["embedding_dim"] = int(embedding_dim)
     if tokenizer_model := os.getenv("TOKENIZER_MODEL"):
         data["models"]["tokenizer_model"] = tokenizer_model
+    if metadata_batch_size := os.getenv("METADATA_BATCH_SIZE"):
+        data["models"]["metadata_batch_size"] = int(metadata_batch_size)
 
     return AppSettings.model_validate(data)

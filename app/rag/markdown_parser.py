@@ -16,6 +16,20 @@ class _Heading:
     end_line: int
 
 
+@dataclass(frozen=True)
+class ParseWarning:
+    code: str
+    message: str
+    line_number: int
+    heading_path: list[str]
+
+
+@dataclass(frozen=True)
+class MarkdownParseResult:
+    chunks: list[DocChunk]
+    warnings: list[ParseWarning]
+
+
 def parse_markdown_document(
     doc_id: str,
     file_path: str,
@@ -28,12 +42,40 @@ def parse_markdown_document(
     max_chunk_chars: int | None = 6000,
     min_chunk_chars: int = 80,
 ) -> list[DocChunk]:
+    return parse_markdown_document_with_report(
+        doc_id,
+        file_path,
+        markdown,
+        max_chunk_tokens=max_chunk_tokens,
+        chunk_overlap_tokens=chunk_overlap_tokens,
+        min_chunk_tokens=min_chunk_tokens,
+        token_counter=token_counter,
+        max_chunk_chars=max_chunk_chars,
+        min_chunk_chars=min_chunk_chars,
+    ).chunks
+
+
+def parse_markdown_document_with_report(
+    doc_id: str,
+    file_path: str,
+    markdown: str,
+    *,
+    max_chunk_tokens: int | None = None,
+    chunk_overlap_tokens: int = 0,
+    min_chunk_tokens: int = 80,
+    token_counter: TokenCounter | None = None,
+    max_chunk_chars: int | None = 6000,
+    min_chunk_chars: int = 80,
+) -> MarkdownParseResult:
     """按 Markdown 标题树构建 chunk；代码块里的 # 不会被当作标题。"""
     markdown = _strip_frontmatter(markdown)
     lines = markdown.splitlines()
     headings = _extract_headings(markdown)
     chunks: list[DocChunk] = []
     stack: list[DocChunk] = []
+    warnings: list[ParseWarning] = []
+    seen_heading_paths: set[tuple[str, ...]] = set()
+    counter = token_counter or HeuristicTokenCounter()
 
     if headings and _slice_lines(lines, 0, headings[0].start_line).strip():
         intro = DocChunk(
@@ -55,6 +97,37 @@ def parse_markdown_document(
 
         parent = stack[-1] if stack else None
         heading_path = [*parent.heading_path, heading.title] if parent else [heading.title]
+        if not heading.title:
+            warnings.append(
+                ParseWarning(
+                    code="empty_heading",
+                    message="标题文本为空。",
+                    line_number=heading.start_line + 1,
+                    heading_path=heading_path,
+                )
+            )
+        if (parent is None and heading.level > 1) or (
+            parent is not None and heading.level > parent.heading_level + 1
+        ):
+            warnings.append(
+                ParseWarning(
+                    code="heading_level_jump",
+                    message="标题层级发生跳级。",
+                    line_number=heading.start_line + 1,
+                    heading_path=heading_path,
+                )
+            )
+        heading_path_key = tuple(heading_path)
+        if heading_path_key in seen_heading_paths:
+            warnings.append(
+                ParseWarning(
+                    code="duplicate_heading_path",
+                    message="同一文档内存在重复 heading_path。",
+                    line_number=heading.start_line + 1,
+                    heading_path=heading_path,
+                )
+            )
+        seen_heading_paths.add(heading_path_key)
         next_heading_start = (
             headings[index + 1].start_line if index + 1 < len(headings) else len(lines)
         )
@@ -79,7 +152,6 @@ def parse_markdown_document(
         stack.append(chunk)
 
         if max_chunk_tokens is not None:
-            counter = token_counter or HeuristicTokenCounter()
             if len(counter.encode(own_content)) > max_chunk_tokens:
                 _split_long_chunk_by_tokens(
                     chunks,
@@ -93,7 +165,9 @@ def parse_markdown_document(
         elif max_chunk_chars is not None and len(own_content) > max_chunk_chars:
             _split_long_chunk(chunks, chunk, heading_markdown, max_chunk_chars, min_chunk_chars)
 
-    return chunks
+    _mark_empty_parent_sections(chunks)
+    _assign_token_counts(chunks, counter)
+    return MarkdownParseResult(chunks=chunks, warnings=warnings)
 
 
 def _extract_headings(markdown: str) -> list[_Heading]:
@@ -261,6 +335,18 @@ def _split_text_by_tokens(
             break
         start += step
     return pieces or [text]
+
+
+def _assign_token_counts(chunks: list[DocChunk], token_counter: TokenCounter) -> None:
+    for chunk in chunks:
+        chunk.token_count = len(token_counter.encode(chunk.raw_markdown))
+
+
+def _mark_empty_parent_sections(chunks: list[DocChunk]) -> None:
+    parent_ids = {chunk.parent_id for chunk in chunks if chunk.parent_id}
+    for chunk in chunks:
+        if chunk.id in parent_ids and not chunk.own_content.strip():
+            chunk.structural_only = True
 
 
 def _link_sibling(existing: list[DocChunk], chunk: DocChunk) -> None:

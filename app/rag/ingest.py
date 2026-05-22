@@ -9,7 +9,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from app.rag.markdown_parser import parse_markdown_document
+from app.rag.markdown_parser import parse_markdown_document_with_report
 from app.rag.token_counter import TokenCounter
 from app.routing.skill_router import SkillManifest, discover_skill_manifests
 
@@ -18,6 +18,34 @@ from app.routing.skill_router import SkillManifest, discover_skill_manifests
 class IngestRecords:
     docs: list[dict[str, Any]]
     chunks: list[dict[str, Any]]
+    warnings: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class SkillIngestReport:
+    skill_name: str
+    file_path: str
+    chunk_count: int
+    section_count: int
+    part_count: int
+    structural_only_count: int
+    max_chunk_tokens: int
+    avg_chunk_tokens: float
+    warning_count: int
+
+
+@dataclass(frozen=True)
+class IngestReport:
+    doc_count: int
+    chunk_count: int
+    section_count: int
+    part_count: int
+    structural_only_count: int
+    max_chunk_tokens: int
+    avg_chunk_tokens: float
+    warning_count: int
+    skills: list[SkillIngestReport]
+    warnings: list[dict[str, Any]]
 
 
 def build_ingest_records(
@@ -32,6 +60,7 @@ def build_ingest_records(
     manifests = discover_skill_manifests(skills_dir)
     docs: list[dict[str, Any]] = []
     chunks: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
 
     for manifest in manifests:
         text = manifest.path.read_text(encoding="utf-8")
@@ -39,7 +68,7 @@ def build_ingest_records(
         content_hash = _sha256(text)
         docs.append(_doc_record(doc_id, manifest, text, content_hash))
 
-        for chunk in parse_markdown_document(
+        parse_result = parse_markdown_document_with_report(
             doc_id,
             str(manifest.path),
             text,
@@ -47,7 +76,20 @@ def build_ingest_records(
             chunk_overlap_tokens=chunk_overlap_tokens,
             min_chunk_tokens=min_chunk_tokens,
             token_counter=token_counter,
-        ):
+        )
+        for warning in parse_result.warnings:
+            warnings.append(
+                {
+                    "skill_name": manifest.skill_name,
+                    "file_path": str(manifest.path),
+                    "code": warning.code,
+                    "message": warning.message,
+                    "line_number": warning.line_number,
+                    "heading_path": warning.heading_path,
+                }
+            )
+
+        for chunk in parse_result.chunks:
             metadata = {
                 "skill_name": manifest.skill_name,
                 "heading_path": chunk.heading_path,
@@ -67,6 +109,7 @@ def build_ingest_records(
                     "sort_order": chunk.sort_order,
                     "node_type": chunk.node_type,
                     "structural_only": chunk.structural_only,
+                    "token_count": chunk.token_count,
                     "parent_id": chunk.parent_id,
                     "prev_sibling_id": chunk.prev_sibling_id,
                     "next_sibling_id": chunk.next_sibling_id,
@@ -80,7 +123,97 @@ def build_ingest_records(
                 }
             )
 
-    return IngestRecords(docs=docs, chunks=chunks)
+    return IngestRecords(docs=docs, chunks=chunks, warnings=warnings)
+
+
+def build_ingest_report(records: IngestRecords) -> IngestReport:
+    """汇总 ingest 解析结果，供 dry-run/report 和人工检查使用。"""
+    skill_reports: list[SkillIngestReport] = []
+    chunks_by_skill: dict[str, list[dict[str, Any]]] = {}
+    warnings_by_skill: dict[str, list[dict[str, Any]]] = {}
+    for chunk in records.chunks:
+        chunks_by_skill.setdefault(str(chunk["metadata_json"]["skill_name"]), []).append(chunk)
+    for warning in records.warnings:
+        warnings_by_skill.setdefault(str(warning["skill_name"]), []).append(warning)
+
+    for doc in records.docs:
+        skill_name = str(doc["skill_name"])
+        skill_chunks = chunks_by_skill.get(skill_name, [])
+        skill_reports.append(
+            SkillIngestReport(
+                skill_name=skill_name,
+                file_path=str(doc["file_path"]),
+                chunk_count=len(skill_chunks),
+                section_count=_count_chunks(skill_chunks, node_type="section"),
+                part_count=_count_chunks(skill_chunks, node_type="part"),
+                structural_only_count=sum(
+                    1 for chunk in skill_chunks if bool(chunk["structural_only"])
+                ),
+                max_chunk_tokens=max((int(chunk["token_count"]) for chunk in skill_chunks), default=0),
+                avg_chunk_tokens=_avg_token_count(skill_chunks),
+                warning_count=len(warnings_by_skill.get(skill_name, [])),
+            )
+        )
+
+    return IngestReport(
+        doc_count=len(records.docs),
+        chunk_count=len(records.chunks),
+        section_count=_count_chunks(records.chunks, node_type="section"),
+        part_count=_count_chunks(records.chunks, node_type="part"),
+        structural_only_count=sum(1 for chunk in records.chunks if bool(chunk["structural_only"])),
+        max_chunk_tokens=max((int(chunk["token_count"]) for chunk in records.chunks), default=0),
+        avg_chunk_tokens=_avg_token_count(records.chunks),
+        warning_count=len(records.warnings),
+        skills=skill_reports,
+        warnings=records.warnings,
+    )
+
+
+def render_ingest_report(report: IngestReport) -> str:
+    """把 ingest 报告渲染成 CLI 友好的文本。"""
+    lines = [
+        "Ingest report",
+        (
+            f"docs={report.doc_count} chunks={report.chunk_count} "
+            f"sections={report.section_count} parts={report.part_count} "
+            f"structural_only={report.structural_only_count}"
+        ),
+        (
+            f"max_chunk_tokens={report.max_chunk_tokens} "
+            f"avg_chunk_tokens={report.avg_chunk_tokens:.1f} warnings={report.warning_count}"
+        ),
+    ]
+    for skill in report.skills:
+        lines.append(
+            (
+                f"- {skill.skill_name}: chunks={skill.chunk_count} "
+                f"sections={skill.section_count} parts={skill.part_count} "
+                f"structural_only={skill.structural_only_count} "
+                f"max_tokens={skill.max_chunk_tokens} "
+                f"avg_tokens={skill.avg_chunk_tokens:.1f} warnings={skill.warning_count}"
+            )
+        )
+    if report.warnings:
+        lines.append("warnings:")
+        for warning in report.warnings:
+            heading_path = " > ".join(warning["heading_path"])
+            lines.append(
+                (
+                    f"- {warning['skill_name']}:{warning['line_number']} "
+                    f"{warning['code']} {heading_path} - {warning['message']}"
+                )
+            )
+    return "\n".join(lines)
+
+
+def _count_chunks(chunks: list[dict[str, Any]], *, node_type: str) -> int:
+    return sum(1 for chunk in chunks if chunk["node_type"] == node_type)
+
+
+def _avg_token_count(chunks: list[dict[str, Any]]) -> float:
+    if not chunks:
+        return 0.0
+    return sum(int(chunk["token_count"]) for chunk in chunks) / len(chunks)
 
 
 def apply_record_cache(records: IngestRecords, cache: dict[str, dict[str, Any]]) -> None:
@@ -95,9 +228,17 @@ def apply_record_cache(records: IngestRecords, cache: dict[str, dict[str, Any]])
         chunk["metadata_embedding"] = cached["metadata_embedding"]
 
 
-def load_record_cache(database_url: str) -> dict[str, dict[str, Any]]:
+def load_record_cache(
+    database_url: str,
+    *,
+    connect_timeout_seconds: int = 5,
+) -> dict[str, dict[str, Any]]:
     """读取已入库 chunk 的元数据和向量缓存。"""
-    with psycopg.connect(_psycopg_url(database_url), row_factory=dict_row) as conn:
+    with psycopg.connect(
+        _psycopg_url(database_url),
+        row_factory=dict_row,
+        connect_timeout=connect_timeout_seconds,
+    ) as conn:
         rows = conn.execute(
             """
             SELECT content_hash, metadata_json, metadata_text,
@@ -121,39 +262,92 @@ def load_record_cache(database_url: str) -> dict[str, dict[str, Any]]:
 
 def apply_embeddings(records: IngestRecords, embedding_client: Any) -> None:
     """为 chunk 生成正文向量和元数据向量；调用方决定是否启用。"""
+    content_chunks = [chunk for chunk in records.chunks if chunk["content_embedding"] is None]
+    if content_chunks:
+        content_embeddings = embedding_client.embed_texts(
+            [chunk["raw_markdown"] for chunk in content_chunks]
+        )
+        for chunk, content_embedding in zip(content_chunks, content_embeddings, strict=True):
+            chunk["content_embedding"] = content_embedding
+
+    metadata_chunks = [chunk for chunk in records.chunks if chunk["metadata_embedding"] is None]
+    if metadata_chunks:
+        metadata_embeddings = embedding_client.embed_texts(
+            [chunk["metadata_text"] for chunk in metadata_chunks]
+        )
+        for chunk, metadata_embedding in zip(metadata_chunks, metadata_embeddings, strict=True):
+            chunk["metadata_embedding"] = metadata_embedding
+
+
+SEMANTIC_METADATA_KEYS = {
+    "module_type",
+    "component_name",
+    "api_name",
+    "usage_type",
+    "searchable_keywords",
+    "summary",
+}
+
+
+def _has_semantic_metadata(metadata_json: dict[str, Any]) -> bool:
+    """判断是否已有 LLM 语义元数据，避免 content_hash 未变化时重复调用模型。"""
+    for key in SEMANTIC_METADATA_KEYS:
+        value = metadata_json.get(key)
+        if isinstance(value, list) and any(value):
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+        if value and not isinstance(value, list | str):
+            return True
+    return False
+
+
+def apply_metadata_extraction(records: IngestRecords, metadata_extractor: Any, on_progress: Any = None) -> None:
+    """在 ingest 阶段用 LLM 元数据增强检索字段。"""
     chunks = [
         chunk
         for chunk in records.chunks
-        if chunk["content_embedding"] is None or chunk["metadata_embedding"] is None
+        if not chunk["structural_only"] and not _has_semantic_metadata(chunk["metadata_json"])
     ]
+    total = len(chunks)
     if not chunks:
         return
 
-    content_texts = [chunk["raw_markdown"] for chunk in chunks]
-    metadata_texts = [chunk["metadata_text"] for chunk in chunks]
-    content_embeddings = embedding_client.embed_texts(content_texts)
-    metadata_embeddings = embedding_client.embed_texts(metadata_texts)
+    items = [
+        {"raw_markdown": chunk["raw_markdown"], "heading_path": chunk["heading_path"]}
+        for chunk in chunks
+    ]
+    if hasattr(metadata_extractor, "iter_extract_many"):
+        extracted_items = metadata_extractor.iter_extract_many(items)
+    elif hasattr(metadata_extractor, "extract_many"):
+        extracted_items = iter(metadata_extractor.extract_many(items))
+    else:
+        extracted_items = (
+            metadata_extractor.extract(item["raw_markdown"], item["heading_path"]) for item in items
+        )
 
-    for chunk, content_embedding, metadata_embedding in zip(
-        chunks, content_embeddings, metadata_embeddings, strict=True
-    ):
-        chunk["content_embedding"] = content_embedding
-        chunk["metadata_embedding"] = metadata_embedding
-
-
-def apply_metadata_extraction(records: IngestRecords, metadata_extractor: Any) -> None:
-    """在 ingest 阶段用 LLM 元数据增强检索字段。"""
-    for chunk in records.chunks:
-        if chunk["content_embedding"] is not None and chunk["metadata_embedding"] is not None:
-            continue
-        extracted = metadata_extractor.extract(chunk["raw_markdown"], chunk["heading_path"])
+    for index, (chunk, extracted) in enumerate(zip(chunks, extracted_items, strict=True), start=1):
         chunk["metadata_json"] = {**chunk["metadata_json"], **extracted}
         chunk["metadata_text"] = _metadata_json_to_text(chunk["metadata_json"])
+        # metadata_text 已变化，旧的元数据向量不再可信，交给 apply_embeddings 重新生成。
+        chunk["metadata_embedding"] = None
+        if on_progress is not None:
+            on_progress(index, total, " > ".join(chunk["heading_path"]))
 
 
-def ingest_records(database_url: str, records: IngestRecords, *, prune: bool = False) -> None:
+def ingest_records(
+    database_url: str,
+    records: IngestRecords,
+    *,
+    prune: bool = False,
+    connect_timeout_seconds: int = 5,
+) -> None:
     """写入 docs/doc_chunks；默认不删除未扫描到的旧文档。"""
-    with psycopg.connect(_psycopg_url(database_url), autocommit=True) as conn:
+    with psycopg.connect(
+        _psycopg_url(database_url),
+        autocommit=True,
+        connect_timeout=connect_timeout_seconds,
+    ) as conn:
         if prune:
             _prune_missing_docs(conn, [doc["id"] for doc in records.docs])
         chunk_ids_by_doc = _chunk_ids_by_doc(records.chunks)
@@ -216,7 +410,7 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
         INSERT INTO doc_chunks (
             id, doc_id, framework_name, framework_version, file_path,
             heading, heading_level, heading_path, sort_order,
-            node_type, structural_only,
+            node_type, structural_only, token_count,
             parent_id, prev_sibling_id, next_sibling_id,
             own_content, raw_markdown, metadata_json, metadata_text,
             content_embedding, metadata_embedding,
@@ -225,7 +419,7 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
         VALUES (
             %(id)s, %(doc_id)s, %(framework_name)s, %(framework_version)s, %(file_path)s,
             %(heading)s, %(heading_level)s, %(heading_path)s::jsonb, %(sort_order)s,
-            %(node_type)s, %(structural_only)s,
+            %(node_type)s, %(structural_only)s, %(token_count)s,
             %(parent_id)s, %(prev_sibling_id)s, %(next_sibling_id)s,
             %(own_content)s, %(raw_markdown)s, %(metadata_json)s::jsonb, %(metadata_text)s,
             %(content_embedding)s::vector, %(metadata_embedding)s::vector,
@@ -240,6 +434,7 @@ def _upsert_chunk(conn: psycopg.Connection, chunk: dict[str, Any]) -> None:
             sort_order = EXCLUDED.sort_order,
             node_type = EXCLUDED.node_type,
             structural_only = EXCLUDED.structural_only,
+            token_count = EXCLUDED.token_count,
             parent_id = EXCLUDED.parent_id,
             prev_sibling_id = EXCLUDED.prev_sibling_id,
             next_sibling_id = EXCLUDED.next_sibling_id,

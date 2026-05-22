@@ -1,4 +1,4 @@
-from app.rag.markdown_parser import parse_markdown_document
+from app.rag.markdown_parser import parse_markdown_document, parse_markdown_document_with_report
 
 
 class CharTokenCounter:
@@ -102,6 +102,60 @@ def test_parse_markdown_document_splits_long_own_content_by_token_counter() -> N
 
     assert parent.own_content == ""
     assert [part.own_content for part in parts] == ["abcd", "defg", "ghij"]
+
+
+def test_parse_markdown_document_reports_structure_warnings_and_token_counts() -> None:
+    markdown = """# A
+
+root
+
+### C
+
+jump
+
+### C
+
+duplicate
+
+#
+
+empty
+"""
+
+    result = parse_markdown_document_with_report(
+        "doc",
+        "doc.md",
+        markdown,
+        token_counter=CharTokenCounter(),
+    )
+
+    codes = [warning.code for warning in result.warnings]
+
+    assert "heading_level_jump" in codes
+    assert "duplicate_heading_path" in codes
+    assert "empty_heading" in codes
+    assert all(chunk.token_count == len(chunk.raw_markdown) for chunk in result.chunks)
+
+
+def test_parse_markdown_document_marks_empty_parent_section_as_structural_only() -> None:
+    markdown = """# Root
+
+## Parent
+
+### Child
+
+child body
+"""
+
+    chunks = parse_markdown_document("doc", "doc.md", markdown)
+    parent = next(chunk for chunk in chunks if chunk.heading == "Parent")
+    child = next(chunk for chunk in chunks if chunk.heading == "Child")
+
+    assert parent.own_content == ""
+    assert parent.structural_only is True
+    assert child.structural_only is False
+
+
 def test_parse_markdown_document_ignores_frontmatter_content() -> None:
     markdown = """---
 name: ui

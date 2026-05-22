@@ -1,5 +1,6 @@
 database:
   url: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/codeagent
+  connect_timeout_seconds: 5
 
 models:
   dashscope_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -7,6 +8,7 @@ models:
   embedding_model: qwen3-vl-embedding
   embedding_dim: 1024
   tokenizer_model: Qwen/Qwen3-Embedding-0.6B
+  metadata_batch_size: 8
 
 rag:
   max_chunk_tokens: 1200

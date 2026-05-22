@@ -19,5 +19,6 @@ def test_build_schema_sql_contains_required_tables_and_vector_columns() -> None:
     assert "metadata_embedding vector(1024)" in sql
     assert "node_type text NOT NULL DEFAULT 'section'" in sql
     assert "structural_only boolean NOT NULL DEFAULT false" in sql
+    assert "token_count integer NOT NULL DEFAULT 0" in sql
     assert "content_tsv tsvector" in sql
     assert "metadata_tsv tsvector" in sql

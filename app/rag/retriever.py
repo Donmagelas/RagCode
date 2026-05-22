@@ -323,9 +323,14 @@ def retrieve_chunks(
     query_embedding: list[float] | None = None,
     metadata_query_embedding: list[float] | None = None,
     return_trace: bool = False,
+    connect_timeout_seconds: int = 5,
 ) -> list[RetrievedChunk] | RetrieveChunksResult:
     """在指定 skill 内执行四路召回并做 RRF 融合。"""
-    with psycopg.connect(_psycopg_url(database_url), row_factory=dict_row) as conn:
+    with psycopg.connect(
+        _psycopg_url(database_url),
+        row_factory=dict_row,
+        connect_timeout=connect_timeout_seconds,
+    ) as conn:
         rank_lists = []
         route_results: dict[str, list[RouteHit]] = {
             "content_fts": [],

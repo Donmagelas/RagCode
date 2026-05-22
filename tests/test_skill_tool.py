@@ -22,6 +22,7 @@ def test_skill_tool_returns_markdown_context_from_retriever() -> None:
 
         class Database:
             url = "postgresql://example"
+            connect_timeout_seconds = 5
 
         rag = Rag()
         models = Models()
@@ -55,3 +56,4 @@ def test_skill_tool_returns_markdown_context_from_retriever() -> None:
     assert calls[0]["expand_threshold_ratio"] == 0.55
     assert calls[0]["max_depth"] == 3
     assert calls[0]["max_context_tokens"] == 12000
+    assert calls[0]["connect_timeout_seconds"] == 5

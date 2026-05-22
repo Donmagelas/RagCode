@@ -6,6 +6,8 @@ from app.rag.ingest import (
     apply_metadata_extraction,
     apply_record_cache,
     build_ingest_records,
+    build_ingest_report,
+    render_ingest_report,
 )
 
 
@@ -53,6 +55,31 @@ def test_build_ingest_records_uses_token_chunking_options(tmp_path: Path) -> Non
     assert [chunk["own_content"] for chunk in records.chunks[1:]] == ["abcd", "defg", "ghij"]
 
 
+def test_build_ingest_report_summarizes_chunks_tokens_and_warnings(tmp_path: Path) -> None:
+    skill_file = tmp_path / "long.md"
+    skill_file.write_text("# Long\n\nabcdefghij\n\n### Jump\n\nbody", encoding="utf-8")
+
+    records = build_ingest_records(
+        tmp_path,
+        max_chunk_tokens=4,
+        chunk_overlap_tokens=1,
+        min_chunk_tokens=1,
+        token_counter=CharTokenCounter(),
+    )
+
+    report = build_ingest_report(records)
+    rendered = render_ingest_report(report)
+
+    assert report.doc_count == 1
+    assert report.chunk_count == len(records.chunks)
+    assert report.part_count >= 1
+    assert report.structural_only_count >= 1
+    assert report.max_chunk_tokens >= 1
+    assert report.warning_count >= 1
+    assert "Ingest report" in rendered
+    assert "heading_level_jump" in rendered
+
+
 def test_apply_embeddings_sets_content_and_metadata_vectors(tmp_path: Path) -> None:
     skill_file = tmp_path / "ui.md"
     skill_file.write_text("# UI\n\nUI 内容。", encoding="utf-8")
@@ -90,6 +117,108 @@ def test_apply_metadata_extraction_enriches_metadata_text(tmp_path: Path) -> Non
     assert records.chunks[0]["metadata_json"]["api_name"] == "OpenPanelAsync"
     assert "打开面板" in records.chunks[0]["metadata_text"]
     assert "OpenPanelAsync" in records.chunks[0]["metadata_text"]
+
+
+def test_apply_metadata_extraction_runs_when_cached_embeddings_exist(tmp_path: Path) -> None:
+    skill_file = tmp_path / "ui.md"
+    skill_file.write_text("# UI\n\n`OpenPanelAsync()` 打开面板。", encoding="utf-8")
+    records = build_ingest_records(tmp_path)
+    chunk = records.chunks[0]
+    chunk["content_embedding"] = [1.0, 2.0]
+    chunk["metadata_embedding"] = [3.0, 4.0]
+
+    class FakeMetadataExtractor:
+        def extract(self, raw_markdown, heading_path):
+            return {
+                "module_type": "UI系统",
+                "component_name": "UIPanel",
+                "api_name": "OpenPanelAsync",
+                "usage_type": "api",
+                "tags": ["面板"],
+                "searchable_keywords": ["打开面板"],
+                "summary": "打开 UI 面板",
+            }
+
+    apply_metadata_extraction(records, FakeMetadataExtractor())
+
+    assert chunk["metadata_json"]["api_name"] == "OpenPanelAsync"
+    assert chunk["content_embedding"] == [1.0, 2.0]
+    assert chunk["metadata_embedding"] is None
+
+
+def test_apply_metadata_extraction_skips_existing_semantic_metadata(tmp_path: Path) -> None:
+    skill_file = tmp_path / "ui.md"
+    skill_file.write_text("# UI\n\n`OpenPanelAsync()` 打开面板。", encoding="utf-8")
+    records = build_ingest_records(tmp_path)
+    chunk = records.chunks[0]
+    chunk["metadata_json"]["summary"] = "已经提取过"
+
+    class FailingMetadataExtractor:
+        def extract(self, raw_markdown, heading_path):
+            raise AssertionError("semantic metadata should be reused")
+
+    apply_metadata_extraction(records, FailingMetadataExtractor())
+
+    assert chunk["metadata_json"]["summary"] == "已经提取过"
+
+
+def test_apply_metadata_extraction_skips_structural_only_chunks(tmp_path: Path) -> None:
+    skill_file = tmp_path / "ui.md"
+    skill_file.write_text("# UI\n\nabcdefghij", encoding="utf-8")
+    records = build_ingest_records(
+        tmp_path,
+        max_chunk_tokens=4,
+        chunk_overlap_tokens=1,
+        min_chunk_tokens=1,
+        token_counter=CharTokenCounter(),
+    )
+
+    called_markdown: list[str] = []
+
+    class FakeMetadataExtractor:
+        def extract(self, raw_markdown, heading_path):
+            called_markdown.append(raw_markdown)
+            return {
+                "module_type": "",
+                "component_name": "",
+                "api_name": "",
+                "usage_type": "",
+                "tags": [],
+                "searchable_keywords": [],
+                "summary": "part metadata",
+            }
+
+    apply_metadata_extraction(records, FakeMetadataExtractor())
+
+    assert records.chunks[0]["structural_only"] is True
+    assert records.chunks[0]["metadata_json"].get("summary") is None
+    assert "# UI" not in called_markdown
+    assert called_markdown == ["abcd", "defg", "ghij"]
+
+
+def test_apply_metadata_extraction_uses_batch_extractor(tmp_path: Path) -> None:
+    skill_file = tmp_path / "ui.md"
+    skill_file.write_text("# UI\n\nA\n\n## Button\n\nB", encoding="utf-8")
+    records = build_ingest_records(tmp_path)
+
+    class FakeBatchMetadataExtractor:
+        def extract_many(self, items):
+            return [
+                {
+                    "module_type": "UI系统",
+                    "component_name": "",
+                    "api_name": "",
+                    "usage_type": "doc",
+                    "tags": [],
+                    "searchable_keywords": [],
+                    "summary": "batch metadata",
+                }
+                for _item in items
+            ]
+
+    apply_metadata_extraction(records, FakeBatchMetadataExtractor())
+
+    assert all(chunk["metadata_json"]["summary"] == "batch metadata" for chunk in records.chunks)
 
 
 def test_apply_record_cache_reuses_metadata_and_embeddings(tmp_path: Path) -> None:

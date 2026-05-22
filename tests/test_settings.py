@@ -10,12 +10,14 @@ def test_load_app_settings_reads_yaml_defaults(tmp_path: Path) -> None:
             [
                 "database:",
                 "  url: postgresql+psycopg://postgres:secret@127.0.0.1:5432/codeagent",
+                "  connect_timeout_seconds: 7",
                 "models:",
                 "  dashscope_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "  chat_model: qwen3.6-plus",
                 "  embedding_model: qwen3-vl-embedding",
                 "  embedding_dim: 1024",
                 "  tokenizer_model: Qwen/Qwen3-Embedding-0.6B",
+                "  metadata_batch_size: 6",
                 "rag:",
                 "  max_chunk_tokens: 1200",
                 "  chunk_overlap_tokens: 120",
@@ -29,10 +31,12 @@ def test_load_app_settings_reads_yaml_defaults(tmp_path: Path) -> None:
     settings = load_app_settings(config_file)
 
     assert settings.database.url.endswith("/codeagent")
+    assert settings.database.connect_timeout_seconds == 7
     assert settings.models.chat_model == "qwen3.6-plus"
     assert settings.models.embedding_model == "qwen3-vl-embedding"
     assert settings.models.embedding_dim == 1024
     assert settings.models.tokenizer_model == "Qwen/Qwen3-Embedding-0.6B"
+    assert settings.models.metadata_batch_size == 6
     assert settings.rag.max_chunk_tokens == 1200
     assert settings.rag.chunk_overlap_tokens == 120
     assert settings.rag.min_chunk_tokens == 80
@@ -45,15 +49,19 @@ def test_load_app_settings_allows_environment_overrides(
     config_file = tmp_path / "default.yaml"
     config_file.write_text("database:\n  url: postgresql+psycopg://default\n", encoding="utf-8")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://env")
+    monkeypatch.setenv("DATABASE_CONNECT_TIMEOUT_SECONDS", "9")
     monkeypatch.setenv("CHAT_MODEL", "env-chat")
     monkeypatch.setenv("EMBEDDING_MODEL", "env-embedding")
     monkeypatch.setenv("EMBEDDING_DIM", "1024")
     monkeypatch.setenv("TOKENIZER_MODEL", "env-tokenizer")
+    monkeypatch.setenv("METADATA_BATCH_SIZE", "4")
 
     settings = load_app_settings(config_file)
 
     assert settings.database.url == "postgresql+psycopg://env"
+    assert settings.database.connect_timeout_seconds == 9
     assert settings.models.chat_model == "env-chat"
     assert settings.models.embedding_model == "env-embedding"
     assert settings.models.embedding_dim == 1024
     assert settings.models.tokenizer_model == "env-tokenizer"
+    assert settings.models.metadata_batch_size == 4

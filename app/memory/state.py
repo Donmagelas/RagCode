@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class AgentState(TypedDict):
@@ -9,8 +9,17 @@ class AgentState(TypedDict):
     messages: list[dict[str, Any]]
     user_goal: str
     selected_skills: list[str]
+    skill_manifests: NotRequired[list[dict[str, Any]]]
+    skill_selection_reason: NotRequired[str]
     retrieved_chunks: list[dict[str, Any]]
     approved_chunks: list[dict[str, Any]]
+    knowledge_context_package: NotRequired[dict[str, Any]]
+    coding_request: NotRequired[dict[str, Any]]
+    coding_result: NotRequired[dict[str, Any]]
+    final_result: NotRequired[dict[str, Any]]
+    backend: NotRequired[str]
+    workspace_path: NotRequired[str]
+    verification_commands: NotRequired[list[str]]
     pending_tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
     files_read: list[str]
@@ -32,8 +41,17 @@ def create_initial_agent_state(
         "messages": [],
         "user_goal": user_goal,
         "selected_skills": [],
+        "skill_manifests": [],
+        "skill_selection_reason": "",
         "retrieved_chunks": [],
         "approved_chunks": [],
+        "knowledge_context_package": {},
+        "coding_request": {},
+        "coding_result": {},
+        "final_result": {},
+        "backend": "codex",
+        "workspace_path": ".",
+        "verification_commands": [],
         "pending_tool_calls": [],
         "tool_results": [],
         "files_read": [],
